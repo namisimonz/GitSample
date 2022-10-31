@@ -1,0 +1,86 @@
+USE [Teal_Project_DPAL_N]
+GO
+/****** Object:  StoredProcedure [dbo].[SP_Live_Productiondashboard]    Script Date: 10/28/2022 9:55:44 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+
+
+
+
+-- =============================================
+-- Author:		<Rakesh Ponnala>
+-- Create date: <21-09-2020>
+-- Description:	<Fetch the Production data from live tables(tbl_ProductionCount_live,Live_Availability,tbl_Live_OEE) >
+-- =============================================
+ALTER procedure [dbo].[SP_Live_Productiondashboard]
+@CompanyCode as Nvarchar(100),  
+@PlantCode NVarchar(100),  
+@linecode as varchar(50)  
+as
+Begin
+SET ANSI_WARNINGS OFF
+
+Declare @time time,@ShiftID as varchar(10)
+--Select @time=cast(Dateadd(mi,31,Dateadd(hh,5,Getdate())) as time)
+Select @time=Getdate() 
+
+
+SET @ShiftID = (select ShiftName from ShiftSetting where LineCode='Proj_DPAL' and  @time BETWEEN StartTime AND EndTime)
+--SET @ShiftID='S2'
+--select @ShiftID
+--Declare @From datetime=dateadd(mi,200,getdate()),
+Declare @to datetime=dateadd(mi,0,getdate())
+Declare @f1 date=(select cast(getdate() as date))
+
+Declare @From1  time=(select Starttime from Shiftsetting where ShiftName=@ShiftID)
+Declare @From datetime
+set @From=(select CONVERT(Datetime,Convert(char(8),@f1,112) +' '+ Convert(char(8),@From1,108)))
+--set @From=(SELECT CONVERT(DATETIME, CONVERT(CHAR(8), Convert(date,dateadd(mi,330,getdate())), 112)
+--  + ' ' + CONVERT(CHAR(8), StartTime, 108)) from shiftsetting(nolock) where shiftname=@ShiftID and CompanyCode=@CompanyCode and PlantCode=@PlantCode and Linecode=@linecode)
+  select @From
+--select  a.Companycode,a.Plantcode,Line_code,AssetName as Machine_Code,Variant_code,(select Top 1 Actual_cycletime from Raw_Cycletime where Companycode=@CompanyCode and Plantcode=@PlantCode and Line_Code=@linecode and Machine_Code=a.AssetID order by Time_Stamp desc)
+--as CycleTime,Time_Stamp
+--into #cycleTime 
+-- from cycletime ct inner join tbl_Assets a on a.FunctionName=ct.Line_code and a.CompanyCode=ct.CompanyCode and a.PlantCode=ct.PlantCode where ct.Time_stamp between  @From and @to
+--and ct.Line_Code=@linecode and ct.Companycode=@CompanyCode and ct.Plantcode=@PlantCode order by machine_code,time_stamp desc
+select  a.Companycode,a.Plantcode,Line_code,AssetName as Machine_Code,Variant_code,Actual_cycletime as CycleTime,
+ct.Time_Stamp
+into #cycleTime 
+ from cycletime ct inner join tbl_Assets a on a.FunctionName=ct.Line_code and a.CompanyCode=ct.CompanyCode and a.PlantCode=ct.PlantCode
+ inner join Raw_Cycletime as c on ct.Line_code=c.LineCode and ct.CompanyCode=c.CompanyCode and ct.PlantCode=c.PlantCode and ct.Machine_Code=c.MachineCode where 
+ ct.Time_stamp between  @From and @to
+and ct.Line_Code=@linecode and ct.Companycode=@CompanyCode and ct.Plantcode=@PlantCode order by machine_code,time_stamp desc
+
+--select * from  #cycleTime
+select CompanyCode,PlantCode,Line_Code,Machine_Code,Variant_Code,max(time_stamp) as time_stamp into #cycleTime1 from #cycleTime group by CompanyCode,PlantCode,Line_Code,Machine_Code,Variant_Code
+select CompanyCode,PlantCode,Line_Code,Machine_Code,Variant_Code,time_stamp into #cycleTime3 from #cycleTime1 where time_stamp=(select max(time_stamp) from #cycleTime1)
+--select * from #cycleTime1
+--select * from #cycleTime3
+select a.CompanyCode,a.PlantCode,a.Line_Code,a.Machine_Code,a.Variant_Code,a.CycleTime into #cycleTime2 from #cycleTime a inner join #cycleTime3 b
+on a.CompanyCode=b.CompanyCode and a.PlantCode=b.PlantCode and a.Line_Code=b.Line_Code and a.Machine_Code=b.Machine_Code and a.Variant_Code=b.Variant_Code and a.Time_Stamp=b.time_stamp
+--select * from #cycleTime2
+Select AssetName as Machine_Code,p.Linecode,p.ShiftID,sum(p.TotalOkParts) as TotalOkParts,Sum(p.TotalNokParts) as TotalNokParts,Sum(p.Totalreworkparts)as TotalReworkParts,Avg(p.Firstpassyeild) as Firstpassyeild,
+p.CompanyCode,
+p.PlantCode,max(time_stamp) as time_stamp into #tbl_ProductionCount_live from tbl_ProductionCount_live p inner join tbl_Assets a on
+a.AssetID=p.Machine_Code and a.FunctionName=p.Linecode and a.CompanyCode=p.CompanyCode and a.PlantCode=p.PlantCode
+where a.FunctionName=@linecode and a.CompanyCode=@CompanyCode and a.PlantCode=@PlantCode and Machine_code=a.AssetID and time_stamp between @From and  @To group by AssetName,p.Linecode,p.ShiftID,p.CompanyCode,
+p.PlantCode
+--select * from #tbl_ProductionCount_live
+select a.CompanyCode,a.PlantCode,a.Line_Code,a.ShiftID,m.AssetID,CONCAT(m.AssetID,'-',m.AssetName) as Asset_ID_Name ,a.Machine_Status,ct.Variant_Code,mp.variantname as VariantName,ct.CycleTime ,TotalOkParts as OkParts,TotalNokParts as Scrap,TotalReworkParts as ReworkParts,DownTime,UpTime,LossTime,BreakTime,OEE,o.Availability,Performance,o.Quality,p.time_stamp
+,Firstpassyeild
+from Live_Availability as a 
+inner join tbl_Live_OEE o on a.Machine_Code=o.Machine_Code and a.Line_Code=o.Line_Code and a.CompanyCode=o.CompanyCode and a.PlantCode=o.PlantCode
+inner join #tbl_ProductionCount_live p on a.Machine_Code=p.Machine_Code and a.Line_Code=p.Linecode and a.CompanyCode=p.CompanyCode and a.PlantCode=p.PlantCode
+Inner join #cycleTime2 ct on  a.Machine_Code=ct.Machine_Code and a.Line_Code=ct.Line_Code and a.CompanyCode=ct.Companycode and a.PlantCode=ct.Plantcode
+inner join tbl_Assets m on m.AssetName=a.Machine_Code and
+ m.FunctionName=a.Line_Code and m.CompanyCode=a.CompanyCode and m.PlantCode=a.PlantCode 
+inner join tbl_MasterProduct mp on p.Linecode=a.Line_Code and mp.CompanyCode=a.CompanyCode and mp.PlantCode=a.PlantCode and mp.variant_code=ct.Variant_code 
+group by a.CompanyCode,a.Line_Code,a.ShiftID,m.AssetID,a.PlantCode,m.AssetName,a.Machine_Status,ct.Variant_Code,mp.VariantName,ct.CycleTime,TotalOkParts,TotalNOkParts,TotalReworkParts,DownTime,UpTime,LossTime,BreakTime,OEE,o.Availability,Performance,o.Quality,p.time_stamp--
+,Firstpassyeild 
+End
+
+
